@@ -1,0 +1,11 @@
+yfinance
+pandas
+numpy
+matplotlib
+scikit-learn
+tqdm
+transformers
+torch
+gnews
+beautifulsoup4
+requests
