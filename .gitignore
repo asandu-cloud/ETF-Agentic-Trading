@@ -1,13 +1,28 @@
-# Virtual environment
-.venv/
-
-# Python
+# ---- Python ----
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Data
-data/raw/*
-data/processed/*
+# ---- Virtual environments ----
+venv/
+.venv/
+ENV/
+env/
+*.egg-info/
 
-# OS files
+# ---- Jupyter ----
+.ipynb_checkpoints/
+
+# ---- Data ----
+data/raw/
+data/processed/
+
+# optional: allow small samples
+!data/raw/sample_*.csv
+
+# ---- OS / Mac ----
 .DS_Store
+
+# ---- Editors ----
+.vscode/
