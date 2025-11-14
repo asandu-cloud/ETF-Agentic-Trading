@@ -17,8 +17,8 @@ def _add_features_single_ticker(g: pd.DataFrame) -> pd.DataFrame:
 
     price = g["adj_close"]
     vol = g["volume"]
-    ret = g["ret_1d"]
-    log_ret = g["log_ret_1d"]
+    ret = g["ret_1d"]    #daily return
+    log_ret = g["log_ret_1d"]  #log return
 
     # --- TREND / MOMENTUM ---
     g["sma_10"] = price.rolling(10).mean()
