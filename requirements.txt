@@ -9,3 +9,4 @@ torch
 gnews
 beautifulsoup4
 requests
+googlenews

@@ -75,7 +75,7 @@ def load_raw_prices(path: Path = RAW_PRICES_CSV) -> pd.DataFrame:
 
 def _prices_to_long(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Conver columns from yfinance base to: date, ticker, open, high, low, close, adj_close, volume
+    Convert columns from yfinance base to: date, ticker, open, high, low, close, adj_close, volume
     """
     # expect MultiIndex columns: (field, ticker)
     if not isinstance(df.columns, pd.MultiIndex):
@@ -238,7 +238,7 @@ def build_processed_prices(force_rebuild: bool = False, run_checks: bool = True)
 
     # quality check
     if run_checks:
-        _run_quality_checks(long)
+        _run_quality_checks(lonag)
 
     # save to parquet or csv as backup
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)

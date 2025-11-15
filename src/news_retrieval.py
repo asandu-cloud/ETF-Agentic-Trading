@@ -16,12 +16,12 @@ from typing import Dict, List, Tuple
 
 import pandas as pd
 from GoogleNews import GoogleNews
-
+from .config import TICKERS, START_DATE
 
 # === 1. Universe configuration ===
 
-TICKERS = ["QQQ", "SPXL", "TLT", "TQQQ"]
-START_DATE = "2010-01-01"
+TICKERS = TICKERS
+START_DATE = START_DATE
 
 
 # --- ETF -> key companies (hand-picked; extend if you like) ---
