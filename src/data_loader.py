@@ -238,7 +238,7 @@ def build_processed_prices(force_rebuild: bool = False, run_checks: bool = True)
 
     # quality check
     if run_checks:
-        _run_quality_checks(lonag)
+        _run_quality_checks(long)
 
     # save to parquet or csv as backup
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
