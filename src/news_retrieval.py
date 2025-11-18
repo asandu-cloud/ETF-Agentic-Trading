@@ -1,232 +1,138 @@
 """
-News retrieval for ETF universe:
-    QQQ, SPXL, TLT, TQQQ
-
-It pulls news about:
-  - the ETF itself
-  - major related companies
-  - sector / macro themes that impact the ETF
-using the GoogleNews package.
+ETF News Retrieval using NewsAPI
+Retrieves news for ETFs: QQQ, SPXL, TLT, TQQQ
+Only ETF-level queries are used to avoid rate limits.
+Includes extraction of relevant keywords for sentiment analysis.
 """
 
 from __future__ import annotations
-
-from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
+from datetime import datetime
+import time
+import random
+from typing import List, Tuple
+import re
 
 import pandas as pd
-from GoogleNews import GoogleNews
-from .config import TICKERS, START_DATE
+from newsapi import NewsApiClient
+from pathlib import Path
 
-# === 1. Universe configuration ===
+# ===============================================
+# 1. Configuration
+# ===============================================
 
-TICKERS = TICKERS
-START_DATE = START_DATE
+TICKERS = ["QQQ", "SPXL", "TLT", "TQQQ"]
+START_DATE = "2010-01-01"
 
-
-# --- ETF -> key companies (hand-picked; extend if you like) ---
-
-ETF_COMPANIES: Dict[str, List[str]] = {
-    "QQQ": [
-        "Apple",
-        "Microsoft",
-        "Amazon",
-        "Nvidia",
-        "Meta Platforms",
-        "Alphabet",
-        "Tesla",
-    ],
-    "TQQQ": [
-        # Same underlying as QQQ (leveraged)
-        "Apple",
-        "Microsoft",
-        "Amazon",
-        "Nvidia",
-        "Meta Platforms",
-        "Alphabet",
-        "Tesla",
-    ],
-    "SPXL": [
-        # Big S&P 500 names (strong impact on SPXL)
-        "Apple",
-        "Microsoft",
-        "Amazon",
-        "Nvidia",
-        "Alphabet",
-        "Berkshire Hathaway",
-        "JPMorgan Chase",
-    ],
-    "TLT": [
-        # For TLT we mostly care about rates / macro, but include big bond-related terms
-        # plus some large bond funds / institutions that often appear in commentary.
-        "U.S. Treasuries",
-        "US Treasuries",
-        "Treasury bonds",
-        "Federal Reserve",
-        "Fed",
-    ],
+# ETF -> key companies (for keywords)
+ETF_COMPANIES = {
+    "QQQ": ["Apple", "Microsoft", "Amazon", "Nvidia", "Meta Platforms", "Alphabet", "Tesla"],
+    "TQQQ": ["Apple", "Microsoft", "Amazon", "Nvidia", "Meta Platforms", "Alphabet", "Tesla"],
+    "SPXL": ["Apple", "Microsoft", "Amazon", "Nvidia", "Alphabet", "Berkshire Hathaway", "JPMorgan Chase"],
+    "TLT": ["U.S. Treasuries", "US Treasuries", "Treasury bonds", "Federal Reserve", "Fed"],
 }
 
-
-# --- ETF -> sector / macro themes that drive them ---
-
-ETF_INDUSTRY_TERMS: Dict[str, List[str]] = {
-    "QQQ": [
-        "Nasdaq 100",
-        "technology sector",
-        "big tech",
-        "semiconductor stocks",
-        "growth stocks",
-    ],
-    "TQQQ": [
-        "Nasdaq 100",
-        "technology sector",
-        "big tech",
-        "leveraged ETFs",
-        "3x ETFs",
-    ],
-    "SPXL": [
-        "S&P 500",
-        "US stock market",
-        "US equities",
-        "bull market",
-        "stock market rally",
-    ],
-    "TLT": [
-        "long-term Treasury yields",
-        "bond market",
-        "interest rates",
-        "yield curve",
-        "rate hikes",
-        "rate cuts",
-        "inflation expectations",
-    ],
+# ETF -> sector/macro terms (for keywords)
+ETF_INDUSTRY_TERMS = {
+    "QQQ": ["Nasdaq 100", "technology sector", "big tech", "semiconductor stocks", "growth stocks"],
+    "TQQQ": ["Nasdaq 100", "technology sector", "big tech", "leveraged ETFs", "3x ETFs"],
+    "SPXL": ["S&P 500", "US stock market", "US equities", "bull market", "stock market rally"],
+    "TLT": ["long-term Treasury yields", "bond market", "interest rates", "yield curve", "rate hikes", "rate cuts", "inflation expectations"],
 }
 
+# Sentiment keywords (optional, for sentiment analysis)
+SENTIMENT_POS = ["rally", "gain", "beat", "surge", "strong", "growth", "record"]
+SENTIMENT_NEG = ["drop", "fall", "miss", "weak", "loss", "slump", "downgrade"]
 
-# === 2. Helper: build queries for each ETF ===
+ALL_KEYWORDS = (
+    [item.lower() for sub in ETF_COMPANIES.values() for item in sub] +
+    [item.lower() for sub in ETF_INDUSTRY_TERMS.values() for item in sub] +
+    SENTIMENT_POS + SENTIMENT_NEG
+)
+
+# ===============================================
+# 2. Initialize NewsAPI
+# ===============================================
+
+# IMPORTANT: replace with your actual API key
+NEWSAPI_KEY = "bee94180b9994146a84784ba51bee662"
+newsapi = NewsApiClient(api_key=NEWSAPI_KEY)
+
+# ===============================================
+# 3. Helper functions
+# ===============================================
 
 def build_search_queries_for_etf(ticker: str) -> List[Tuple[str, str]]:
     """
-    Build a list of (query_string, query_type) for a given ETF.
-
-    query_type is one of: "etf", "company", "industry".
+    Return ETF-only search queries.
     """
+    etf_only_queries = {
+        "QQQ": ["QQQ ETF", "Invesco QQQ ETF", "Nasdaq 100 ETF"],
+        "TQQQ": ["TQQQ ETF", "ProShares UltraPro QQQ", "3x Nasdaq 100 ETF"],
+        "SPXL": ["SPXL ETF", "Direxion Daily S&P 500 Bull 3X Shares", "3x S&P 500 ETF"],
+        "TLT": ["TLT ETF", "iShares 20+ Year Treasury Bond ETF", "long duration Treasury bond ETF"],
+    }
+    return [(q, "etf") for q in etf_only_queries.get(ticker, [f"{ticker} ETF"])]
 
-    queries: List[Tuple[str, str]] = []
-
-    # ETF-level queries
-    if ticker == "QQQ":
-        queries.extend(
-            [
-                ("QQQ ETF", "etf"),
-                ("Invesco QQQ ETF", "etf"),
-                ("Nasdaq 100 ETF", "etf"),
-            ]
-        )
-    elif ticker == "TQQQ":
-        queries.extend(
-            [
-                ("TQQQ ETF", "etf"),
-                ("ProShares UltraPro QQQ", "etf"),
-                ("3x Nasdaq 100 ETF", "etf"),
-            ]
-        )
-    elif ticker == "SPXL":
-        queries.extend(
-            [
-                ("SPXL ETF", "etf"),
-                ("Direxion Daily S&P 500 Bull 3X Shares", "etf"),
-                ("3x S&P 500 ETF", "etf"),
-            ]
-        )
-    elif ticker == "TLT":
-        queries.extend(
-            [
-                ("TLT ETF", "etf"),
-                ("iShares 20+ Year Treasury Bond ETF", "etf"),
-                ("long duration Treasury bond ETF", "etf"),
-            ]
-        )
-    else:
-        # Fallback generic ETF query
-        queries.append((f"{ticker} ETF", "etf"))
-
-    # Company-level queries
-    for name in ETF_COMPANIES.get(ticker, []):
-        queries.append((name, "company"))
-
-    # Industry / macro-level queries
-    for term in ETF_INDUSTRY_TERMS.get(ticker, []):
-        queries.append((term, "industry"))
-
-    return queries
-
-
-# === 3. GoogleNews wrappers ===
+def extract_relevant_keywords(text: str) -> list:
+    """
+    Extract relevant ETF/company/macro and sentiment keywords from text.
+    """
+    if not isinstance(text, str):
+        return []
+    text = text.lower()
+    found = [kw for kw in ALL_KEYWORDS if kw in text]
+    return list(set(found))
 
 def _fetch_news_single_query(
     query: str,
-    start_date: datetime,
-    end_date: datetime,
-    lang: str = "en",
-    max_pages: int = 3,
+    start_date: str,
+    end_date: str,
+    max_results: int = 50,
 ) -> pd.DataFrame:
     """
-    Fetch news from GoogleNews for a single query and date range.
-
-    Returns a DataFrame with columns at least:
-      ['title', 'media', 'date', 'desc', 'link']
+    Fetch news from NewsAPI for one query.
     """
-    start_str = start_date.strftime("%m/%d/%Y")
-    end_str = end_date.strftime("%m/%d/%Y")
-
-    gn = GoogleNews(start=start_str, end=end_str, lang=lang)
-    gn.search(query)
-
-    all_results = []
-
-    # First page (after search)
-    results = gn.result()
-    all_results.extend(results)
-
-    for page in range(2, max_pages + 1):
-        gn.getpage(page)
-        res = gn.result()
-        if not res:
-            break
-        all_results.extend(res)
-
-    if not all_results:
+    try:
+        response = newsapi.get_everything(
+            q=query,
+            from_param=start_date,
+            to=end_date,
+            language="en",
+            sort_by="relevancy",
+            page_size=max_results,
+        )
+    except Exception as e:
+        print(f"[ERROR] Request for '{query}' failed: {e}")
         return pd.DataFrame(columns=["title", "media", "date", "desc", "link"])
 
-    df = pd.DataFrame(all_results)
-    df = df.drop_duplicates(subset="link")
+    if response.get("status") != "ok":
+        print(f"[WARN] Query='{query}' failed: {response.get('message')}")
+        return pd.DataFrame(columns=["title", "media", "date", "desc", "link"])
 
-    # Normalize date
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    articles = response.get("articles", [])
+    if not articles:
+        return pd.DataFrame(columns=["title", "media", "date", "desc", "link"])
 
-    return df
+    df = pd.DataFrame(articles)
+    df.rename(columns={
+        "source": "media",
+        "publishedAt": "date",
+        "url": "link",
+        "description": "desc",
+    }, inplace=True)
+    df["media"] = df["media"].apply(lambda x: x.get("name") if isinstance(x, dict) else x)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df[["title", "media", "date", "desc", "link"]]
 
+# ===============================================
+# 4. Fetch news for a single ETF
+# ===============================================
 
 def fetch_news_for_etf(
     ticker: str,
     start_date: str | datetime,
     end_date: str | datetime | None = None,
-    lang: str = "en",
-    max_pages_per_query: int = 3,
 ) -> pd.DataFrame:
-    """
-    Fetch news for a single ETF, including:
-      - the ETF itself
-      - related companies
-      - industry/macro terms
-
-    Returns a DataFrame with:
-      ['ticker', 'query', 'query_type', 'title', 'media', 'date',
-       'desc', 'link']
-    """
 
     if isinstance(start_date, str):
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -240,124 +146,74 @@ def fetch_news_for_etf(
     else:
         end_dt = end_date
 
-    # You might not want to hit all years at once, but this is the simple
-    # version: single big range. For larger backtests, chunk by year.
-    queries = build_search_queries_for_etf(ticker)
+    start_str = start_dt.strftime("%Y-%m-%d")
+    end_str = end_dt.strftime("%Y-%m-%d")
 
-    all_frames = []
+    queries = build_search_queries_for_etf(ticker)
+    all_frames: List[pd.DataFrame] = []
 
     for q, qtype in queries:
-        print(f"[{ticker}] Fetching news for query='{q}' ({qtype})")
-        df_q = _fetch_news_single_query(
-            query=q,
-            start_date=start_dt,
-            end_date=end_dt,
-            lang=lang,
-            max_pages=max_pages_per_query,
-        )
+        print(f"[{ticker}] Fetching news for '{q}' ({qtype})")
+
+        df_q = _fetch_news_single_query(query=q, start_date=start_str, end_date=end_str)
+        # delay to respect API limits
+        time.sleep(random.uniform(1.5, 2.5))
+
         if df_q.empty:
             continue
 
         df_q["ticker"] = ticker
         df_q["query"] = q
         df_q["query_type"] = qtype
+        # extract relevant keywords for sentiment
+        df_q["relevant_keywords"] = (df_q["title"].fillna("") + " " + df_q["desc"].fillna("")).apply(extract_relevant_keywords)
 
         all_frames.append(df_q)
 
     if not all_frames:
-        return pd.DataFrame(
-            columns=[
-                "ticker",
-                "query",
-                "query_type",
-                "title",
-                "media",
-                "date",
-                "desc",
-                "link",
-            ]
-        )
+        return pd.DataFrame(columns=["ticker","query","query_type","title","media","date","desc","link","relevant_keywords"])
 
     out = pd.concat(all_frames, ignore_index=True)
-
-    # Reorder columns for convenience
-    cols = [
-        "ticker",
-        "query",
-        "query_type",
-        "title",
-        "media",
-        "date",
-        "desc",
-        "link",
-    ]
-    out = out[[c for c in cols if c in out.columns]]
-
-    # De-duplicate across queries (same article might appear for multiple terms)
     out = out.drop_duplicates(subset=["ticker", "link"])
-
     return out
 
+# ===============================================
+# 5. Fetch news for entire ETF universe
+# ===============================================
 
 def fetch_news_for_universe(
-    tickers: List[str] = TICKERS,
+    tickers: List[str] = None,
     start_date: str | datetime = START_DATE,
     end_date: str | datetime | None = None,
-    lang: str = "en",
-    max_pages_per_query: int = 3,
 ) -> pd.DataFrame:
-    """
-    Fetch news for the whole ETF universe.
+    if tickers is None:
+        tickers = TICKERS
 
-    Returns a DataFrame with all ETFs stacked.
-    """
-
-    all_etf_frames = []
-
+    all_frames: List[pd.DataFrame] = []
     for t in tickers:
-        df_t = fetch_news_for_etf(
-            ticker=t,
-            start_date=start_date,
-            end_date=end_date,
-            lang=lang,
-            max_pages_per_query=max_pages_per_query,
-        )
-        all_etf_frames.append(df_t)
+        df_t = fetch_news_for_etf(t, start_date, end_date)
+        all_frames.append(df_t)
 
-    if not all_etf_frames:
-        return pd.DataFrame(
-            columns=[
-                "ticker",
-                "query",
-                "query_type",
-                "title",
-                "media",
-                "date",
-                "desc",
-                "link",
-            ]
-        )
+    if not all_frames:
+        return pd.DataFrame(columns=["ticker","query","query_type","title","media","date","desc","link","relevant_keywords"])
 
-    universe_df = pd.concat(all_etf_frames, ignore_index=True)
+    return pd.concat(all_frames, ignore_index=True)
 
-    return universe_df
-
-
-# === 4. CLI entry point (optional) ===
+# ===============================================
+# 6. CLI / main
+# ===============================================
 
 if __name__ == "__main__":
-    # Example: fetch from 2010-01-01 to today and save to disk
+    Path("data/raw").mkdir(parents=True, exist_ok=True)
+
     news_df = fetch_news_for_universe(
         tickers=TICKERS,
-        start_date=START_DATE,
-        end_date=None,  # -> today
-        lang="en",
-        max_pages_per_query=3,  # tune this up/down
+        start_date="2025-11-01",
     )
 
     print(news_df.head())
     print(f"\nTotal articles downloaded: {len(news_df)}")
 
-    # Save to parquet so you can reuse for sentiment, keywords, etc.
-    news_df.to_parquet("data/raw/google_news_etf_universe.parquet", index=False)
-    print("\nSaved to data/raw/google_news_etf_universe.parquet")
+    out_path = "data/raw/newsapi_etf_universe.csv"
+    news_df.to_csv(out_path, index=False)
+    print(f"\nSaved to {out_path}")
