@@ -3,7 +3,7 @@
 import pandas as pd
 from pathlib import Path
 
-from news_finbert import add_finbert_sentiment, aggregate_daily_sentiment
+from src.news_finbert import add_finbert_sentiment, aggregate_daily_sentiment
 
 
 def main():

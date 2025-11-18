@@ -10,3 +10,4 @@ gnews
 beautifulsoup4
 requests
 googlenews
+newsapi-python
